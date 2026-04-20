@@ -1,2 +1,1 @@
-# FDI-Analytics
-Foreign Direct Investment flows across 20 countries · 2020–2023 · USD millions
+This project demonstrates a production-style Oracle database for tracking and analysing Foreign Direct Investment data across countries and sectors. It covers the full stack — schema design, bulk data seeding, 7 analytical views with window functions, a PL/SQL package, 4 automated triggers, and 12 advanced queries including rolling averages, PIVOT, and HHI concentration index. A self-contained HTML dashboard ties it all together with 5 interactive tabs.
