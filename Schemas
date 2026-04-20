@@ -1,0 +1,183 @@
+-- =============================================================
+-- FILE: 01_schema.sql
+-- PROJECT: Oracle FDI Analytics
+-- DESC: DDL — Creates all tables, constraints, sequences, indexes
+-- =============================================================
+
+-- Drop existing objects (safe re-run)
+BEGIN
+    FOR t IN (SELECT table_name FROM user_tables
+              WHERE table_name IN ('FDI_AUDIT_LOG','FDI_TRANSACTIONS',
+                                   'EXCHANGE_RATES','SECTORS',
+                                   'INVESTMENT_TYPES','COUNTRIES'))
+    LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || t.table_name || ' CASCADE CONSTRAINTS';
+    END LOOP;
+END;
+/
+
+BEGIN
+    FOR s IN (SELECT sequence_name FROM user_sequences
+              WHERE sequence_name IN ('SEQ_COUNTRY','SEQ_SECTOR',
+                                      'SEQ_INV_TYPE','SEQ_FDI_TXN',
+                                      'SEQ_EXCH_RATE','SEQ_AUDIT'))
+    LOOP
+        EXECUTE IMMEDIATE 'DROP SEQUENCE ' || s.sequence_name;
+    END LOOP;
+END;
+/
+
+
+-- =============================================================
+-- SEQUENCES
+-- =============================================================
+CREATE SEQUENCE SEQ_COUNTRY    START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE SEQ_SECTOR     START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE SEQ_INV_TYPE   START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE SEQ_FDI_TXN    START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE SEQ_EXCH_RATE  START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE SEQ_AUDIT      START WITH 1  INCREMENT BY 1 NOCACHE NOCYCLE;
+
+
+-- =============================================================
+-- TABLE: COUNTRIES
+-- =============================================================
+CREATE TABLE COUNTRIES (
+    country_id      NUMBER          DEFAULT SEQ_COUNTRY.NEXTVAL,
+    iso_code        CHAR(3)         NOT NULL,
+    country_name    VARCHAR2(100)   NOT NULL,
+    region          VARCHAR2(50)    NOT NULL,
+    sub_region      VARCHAR2(80),
+    is_active       CHAR(1)         DEFAULT 'Y' NOT NULL,
+    created_at      DATE            DEFAULT SYSDATE NOT NULL,
+
+    CONSTRAINT PK_COUNTRIES     PRIMARY KEY (country_id),
+    CONSTRAINT UQ_COUNTRY_ISO   UNIQUE      (iso_code),
+    CONSTRAINT CK_COUNTRY_ACT   CHECK       (is_active IN ('Y','N'))
+);
+
+COMMENT ON TABLE  COUNTRIES              IS 'Master list of countries involved in FDI flows';
+COMMENT ON COLUMN COUNTRIES.iso_code     IS 'ISO 3166-1 alpha-3 country code';
+COMMENT ON COLUMN COUNTRIES.region       IS 'Broad geographic region (e.g. Asia, Europe)';
+
+
+-- =============================================================
+-- TABLE: SECTORS
+-- =============================================================
+CREATE TABLE SECTORS (
+    sector_id       NUMBER          DEFAULT SEQ_SECTOR.NEXTVAL,
+    sector_code     VARCHAR2(10)    NOT NULL,
+    sector_name     VARCHAR2(100)   NOT NULL,
+    sector_group    VARCHAR2(60)    NOT NULL,  -- e.g. Primary / Secondary / Tertiary
+    description     VARCHAR2(300),
+
+    CONSTRAINT PK_SECTORS       PRIMARY KEY (sector_id),
+    CONSTRAINT UQ_SECTOR_CODE   UNIQUE      (sector_code)
+);
+
+COMMENT ON TABLE SECTORS IS 'Industry sector classification for FDI categorisation';
+
+
+-- =============================================================
+-- TABLE: INVESTMENT_TYPES
+-- =============================================================
+CREATE TABLE INVESTMENT_TYPES (
+    inv_type_id     NUMBER          DEFAULT SEQ_INV_TYPE.NEXTVAL,
+    type_code       VARCHAR2(10)    NOT NULL,
+    type_name       VARCHAR2(80)    NOT NULL,
+    description     VARCHAR2(300),
+
+    CONSTRAINT PK_INV_TYPES     PRIMARY KEY (inv_type_id),
+    CONSTRAINT UQ_INV_TYPE_CODE UNIQUE      (type_code)
+);
+
+COMMENT ON TABLE INVESTMENT_TYPES IS 'Classification of FDI entry mode (Greenfield, M&A, JV, etc.)';
+
+
+-- =============================================================
+-- TABLE: EXCHANGE_RATES
+-- (Annual average USD conversion rate per currency)
+-- =============================================================
+CREATE TABLE EXCHANGE_RATES (
+    rate_id         NUMBER          DEFAULT SEQ_EXCH_RATE.NEXTVAL,
+    iso_code        CHAR(3)         NOT NULL,
+    rate_year       NUMBER(4)       NOT NULL,
+    usd_rate        NUMBER(18,6)    NOT NULL,   -- 1 local unit = X USD
+    updated_at      DATE            DEFAULT SYSDATE,
+
+    CONSTRAINT PK_EXCH_RATES    PRIMARY KEY (rate_id),
+    CONSTRAINT UQ_EXCH_YEAR     UNIQUE      (iso_code, rate_year),
+    CONSTRAINT CK_USD_RATE      CHECK       (usd_rate > 0)
+);
+
+
+-- =============================================================
+-- TABLE: FDI_TRANSACTIONS  (Core Fact Table)
+-- =============================================================
+CREATE TABLE FDI_TRANSACTIONS (
+    txn_id              NUMBER              DEFAULT SEQ_FDI_TXN.NEXTVAL,
+    source_country_id   NUMBER              NOT NULL,   -- Investing country
+    dest_country_id     NUMBER              NOT NULL,   -- Recipient country
+    sector_id           NUMBER              NOT NULL,
+    inv_type_id         NUMBER              NOT NULL,
+    txn_year            NUMBER(4)           NOT NULL,
+    txn_quarter         NUMBER(1),                      -- 1–4, NULL if annual
+    amount_usd_mn       NUMBER(18,2)        NOT NULL,   -- USD millions
+    num_projects        NUMBER(6)           DEFAULT 1,
+    jobs_created        NUMBER(10),
+    notes               VARCHAR2(500),
+    data_source         VARCHAR2(100)       DEFAULT 'UNCTAD',
+    created_at          DATE                DEFAULT SYSDATE NOT NULL,
+    updated_at          DATE                DEFAULT SYSDATE NOT NULL,
+
+    CONSTRAINT PK_FDI_TXN           PRIMARY KEY (txn_id),
+    CONSTRAINT FK_FDI_SRC_COUNTRY   FOREIGN KEY (source_country_id)
+                                    REFERENCES COUNTRIES(country_id),
+    CONSTRAINT FK_FDI_DST_COUNTRY   FOREIGN KEY (dest_country_id)
+                                    REFERENCES COUNTRIES(country_id),
+    CONSTRAINT FK_FDI_SECTOR        FOREIGN KEY (sector_id)
+                                    REFERENCES SECTORS(sector_id),
+    CONSTRAINT FK_FDI_INV_TYPE      FOREIGN KEY (inv_type_id)
+                                    REFERENCES INVESTMENT_TYPES(inv_type_id),
+    CONSTRAINT CK_FDI_YEAR          CHECK       (txn_year BETWEEN 2000 AND 2099),
+    CONSTRAINT CK_FDI_QUARTER       CHECK       (txn_quarter IS NULL OR txn_quarter BETWEEN 1 AND 4),
+    CONSTRAINT CK_FDI_AMOUNT        CHECK       (amount_usd_mn > 0),
+    CONSTRAINT CK_FDI_DIFF_CTRY     CHECK       (source_country_id <> dest_country_id)
+);
+
+COMMENT ON TABLE  FDI_TRANSACTIONS             IS 'Core fact table — each row is one FDI investment record';
+COMMENT ON COLUMN FDI_TRANSACTIONS.amount_usd_mn IS 'Investment value in USD millions';
+COMMENT ON COLUMN FDI_TRANSACTIONS.jobs_created  IS 'Estimated jobs created in destination country';
+
+
+-- =============================================================
+-- TABLE: FDI_AUDIT_LOG
+-- =============================================================
+CREATE TABLE FDI_AUDIT_LOG (
+    audit_id        NUMBER          DEFAULT SEQ_AUDIT.NEXTVAL,
+    table_name      VARCHAR2(50)    NOT NULL,
+    operation       VARCHAR2(10)    NOT NULL,   -- INSERT / UPDATE / DELETE
+    record_id       NUMBER          NOT NULL,
+    old_value_json  CLOB,
+    new_value_json  CLOB,
+    changed_by      VARCHAR2(100)   DEFAULT USER NOT NULL,
+    changed_at      TIMESTAMP       DEFAULT SYSTIMESTAMP NOT NULL,
+
+    CONSTRAINT PK_AUDIT_LOG     PRIMARY KEY (audit_id),
+    CONSTRAINT CK_AUDIT_OP      CHECK       (operation IN ('INSERT','UPDATE','DELETE'))
+);
+
+COMMENT ON TABLE FDI_AUDIT_LOG IS 'Audit trail for all DML changes on FDI_TRANSACTIONS';
+
+
+-- =============================================================
+-- INDEXES  (performance)
+-- =============================================================
+CREATE INDEX IDX_FDI_SRC       ON FDI_TRANSACTIONS(source_country_id);
+CREATE INDEX IDX_FDI_DST       ON FDI_TRANSACTIONS(dest_country_id);
+CREATE INDEX IDX_FDI_SECTOR    ON FDI_TRANSACTIONS(sector_id);
+CREATE INDEX IDX_FDI_YEAR      ON FDI_TRANSACTIONS(txn_year);
+CREATE INDEX IDX_FDI_YEAR_SEC  ON FDI_TRANSACTIONS(txn_year, sector_id);
+CREATE INDEX IDX_AUDIT_TABLE   ON FDI_AUDIT_LOG(table_name, changed_at);
+
+PROMPT Schema created successfully.
